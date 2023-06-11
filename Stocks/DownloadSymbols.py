@@ -55,21 +55,23 @@ def get_list_by_exchange_alphabet(master_url, exchange, alphabet):
     
     return( df )
 
+df_symbol = pd.DataFrame(columns=["Exchange", "Symbol", "Company"])
+eoddata_url = "https://eoddata.com/stocklist/"
 
 for ExchangeName in ["NASDAQ", "NYSE"]:
     print(f"Processing Stocks from {ExchangeName}", "\n")
     for i in tqdm(range(len(uppercase))):
         alphabet = uppercase[i]        
         result = get_list_by_exchange_alphabet(eoddata_url, ExchangeName, alphabet)
-        master_df = pd.concat([master_df, result])
+        df_symbol = pd.concat([master_df, result])
 
-master_df['DownloadDate'] = str(date.today)
-
+df_symbol['DownloadDate'] = str(date.today)
+df_symbol=df_symbol.reset_index(drop=True)
 
 print('\n')
 t0 = time()
 print('Begin saving Info data to Pickle file compressed by BZ2, ', pd.to_datetime(t0, unit='s'))
 filename = 'D:/Temp/data/USMarket/data/US-Symbol-' + str(date.today()) +'.pkl'
-df_info.to_pickle(filename, compression='bz2')
+df_symbol.to_pickle(filename, compression='bz2')
 t1=time()
 print('Finish saving Info file to Pickle, ', pd.to_datetime(t1, unit='s'))
