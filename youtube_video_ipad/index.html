@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>iPad Video Hub</title>
+    <style>
+        :root { 
+            --ipad-blue: #007aff; 
+            --ipad-gray: #8e8e93; 
+            --ipad-bg: #f2f2f7; 
+            --error-red: #ff3b30;
+            --success-green: #34c759;
+        }
+
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-color: var(--ipad-bg); 
+            display: flex; justify-content: center; align-items: center; 
+            height: 100vh; margin: 0; 
+        }
+
+        .container { 
+            background: white; padding: 32px; border-radius: 24px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1); 
+            width: 100%; max-width: 400px; text-align: center;
+        }
+
+        h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; color: #1c1c1e; }
+        p.subtitle { color: var(--ipad-gray); font-size: 15px; margin-bottom: 24px; }
+
+        .input-group { text-align: left; margin-bottom: 16px; }
+        label { display: block; font-size: 12px; font-weight: 600; color: var(--ipad-gray); margin-bottom: 6px; margin-left: 4px; text-transform: uppercase; }
+
+        input { 
+            width: 100%; padding: 14px; border: 1px solid #d1d1d6; border-radius: 12px; 
+            font-size: 16px; box-sizing: border-box; transition: all 0.2s; background: #f9f9f9;
+        }
+        input:focus { outline: none; border-color: var(--ipad-blue); background: #fff; box-shadow: 0 0 0 4px rgba(0,122,255,0.1); }
+
+        #convertBtn { 
+            width: 100%; background: var(--ipad-blue); color: white; border: none; 
+            padding: 16px; border-radius: 12px; font-size: 17px; font-weight: 600; 
+            cursor: pointer; margin-top: 8px; transition: transform 0.1s, opacity 0.2s;
+        }
+        #convertBtn:active { transform: scale(0.98); }
+        #convertBtn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        /* Error and Status Display */
+        #status { margin-top: 20px; font-size: 14px; min-height: 20px; line-height: 1.4; }
+        .error-card { 
+            background-color: #fff2f2; border: 1px solid #ffcccc; 
+            color: var(--error-red); padding: 12px; border-radius: 10px; font-weight: 500;
+        }
+        .loading-spinner { color: var(--ipad-blue); font-weight: 500; }
+
+        /* Results Area */
+        .result-box { 
+            margin-top: 24px; padding: 20px; background: #f9f9f9; 
+            border-radius: 16px; border: 1px solid #e5e5ea;
+        }
+        .video-title { font-weight: 600; font-size: 16px; margin-bottom: 4px; color: #1c1c1e; }
+        .mode-badge { 
+            display: inline-block; font-size: 11px; padding: 2px 8px; 
+            border-radius: 6px; background: #e5e5ea; margin-bottom: 12px; 
+        }
+        .download-btn { 
+            display: block; background: var(--success-green); color: white; 
+            text-decoration: none; padding: 14px; border-radius: 12px; 
+            font-weight: 600; transition: opacity 0.2s;
+        }
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>iPad Video Hub</h1>
+    <p class="subtitle">Convert YouTube to iPad-ready MP4</p>
+    
+    <div class="input-group">
+        <label>Video URL</label>
+        <input type="text" id="videoUrl" placeholder="Paste YouTube link here" />
+    </div>
+
+    <div class="input-group">
+        <label>Promotion Code</label>
+        <input type="text" id="promoCode" placeholder="Enter code for full length" />
+    </div>
+
+    <button id="convertBtn" onclick="handleConversion()">Generate Download Link</button>
+
+    <div id="status"></div>
+
+    <div id="resultArea" class="result-box hidden">
+        <div id="modeBadge" class="mode-badge"></div>
+        <div class="video-title" id="videoTitle">Video Title</div>
+        <p style="font-size: 13px; color: var(--ipad-gray); margin-bottom: 16px;">Format: MP4 (H.264 / AAC)</p>
+        <a id="downloadLink" class="download-btn" href="#">⬇️ Save to iPad</a>
+    </div>
+</div>
+
+<script>
+    async function handleConversion() {
+        const url = document.getElementById('videoUrl').value.trim();
+        const code = document.getElementById('promoCode').value.trim();
+        const btn = document.getElementById('convertBtn');
+        const status = document.getElementById('status');
+        const resultArea = document.getElementById('resultArea');
+        const modeBadge = document.getElementById('modeBadge');
+
+        if (!url) {
+            status.innerHTML = `<div class="error-card">Please enter a YouTube URL first.</div>`;
+            return;
+        }
+
+        // Prepare UI for processing
+        btn.disabled = true;
+        btn.innerText = "Processing...";
+        status.innerHTML = `<div class="loading-spinner">⚙️ Fetching video and converting...</div>`;
+        resultArea.classList.add('hidden');
+
+        try {
+            const response = await fetch('/convert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url, code: code })
+            });
+
+            const data = await response.json();
+
+            if (response.ok) {
+                status.innerHTML = `<span style="color: var(--success-green); font-weight: 600;">✅ Success!</span>`;
+                document.getElementById('videoTitle').innerText = data.title;
+                document.getElementById('downloadLink').href = data.download_url;
+                
+                // Show if it was full or trial
+                if (data.mode === 'full') {
+                    modeBadge.innerText = "PREMIUM FULL ACCESS";
+                    modeBadge.style.backgroundColor = "#e1f5fe";
+                    modeBadge.style.color = "#0288d1";
+                } else {
+                    modeBadge.innerText = "3-MINUTE TRIAL";
+                    modeBadge.style.backgroundColor = "#fff3e0";
+                    modeBadge.style.color = "#ef6c00";
+                }
+                
+                resultArea.classList.remove('hidden');
+            } else {
+                // Display the specific error returned by the backend (DRM, Private, etc.)
+                status.innerHTML = `<div class="error-card"><strong>Error:</strong><br>${data.error}</div>`;
+            }
+        } catch (err) {
+            status.innerHTML = `<div class="error-card"><strong>Connection Error:</strong><br>The server could not be reached.</div>`;
+        } finally {
+            btn.disabled = false;
+            btn.innerText = "Generate Download Link";
+        }
+    }
+</script>
+
+</body>
+</html>
