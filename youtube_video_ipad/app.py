@@ -1,210 +1,136 @@
 import os
-import subprocess
 import time
-import sys
 import re
-from flask import Flask, request, jsonify, send_file, after_this_request
+from flask import Flask, request, jsonify, send_file
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import download_range_func # NEW: Required for cutting video
 from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
-DEBUG_LOG = 'debug.txt'  # The file where we will dump everything
+# --- CONFIGURATION ---
 DOWNLOAD_FOLDER = 'downloads'
+PROMO_CODE = "98033"
+FILE_EXPIRY_SECONDS = 3600  # Delete files after 1 hour
+
 if not os.path.exists(DOWNLOAD_FOLDER):
     os.makedirs(DOWNLOAD_FOLDER)
 
-# Function to remove ANSI escape sequences (the [0m characters)
 def clean_ansi(text):
     ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
     return ansi_escape.sub('', text)
 
-
-# --- START CLEANUP LOGIC ---
+# --- BACKGROUND CLEANUP ---
 def cleanup_old_files():
-    print("🧹 Running cleanup task...")
     now = time.time()
-    cutoff = 3600  # 1 hour in seconds
-
-    # Loop through all files in the download folder
     for filename in os.listdir(DOWNLOAD_FOLDER):
         file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-        
-        # Skip if it's not a file
-        if not os.path.isfile(file_path):
-            continue
-            
-        # Get file creation/modification time
-        file_age = os.path.getmtime(file_path)
-        
-        # If the file is older than 1 hour (now - file_age > 3600)
-        if now - file_age > cutoff:
-            try:
-                os.remove(file_path)
-                print(f"🗑️ Deleted old file: {filename}")
-            except Exception as e:
-                print(f"⚠️ Could not delete {filename}: {e}")
+        if os.path.isfile(file_path):
+            if now - os.path.getmtime(file_path) > FILE_EXPIRY_SECONDS:
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(func=cleanup_old_files, trigger="interval", minutes=5)
+scheduler.add_job(func=cleanup_old_files, trigger="interval", minutes=15)
 scheduler.start()
 
-# --- BASE OPTIONS ---
-# We keep the common settings here, but we will add specific settings per request
-base_opts = {
-    'format': 'bestvideo+bestaudio/best',  # Get best quality
-    'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(id)s_%(title)s.%(ext)s'),
-    'merge_output_format': 'mp4',
-    'quiet': False, # Setting to False so it actually writes to stderr/stdout
-    'no_warnings': False,
-}
+# --- ROUTES ---
 
 @app.route('/')
 def index():
     return send_file('index.html')
 
+@app.route('/get_info', methods=['POST'])
+def get_info():
+    video_url = request.json.get('url')
+    if not video_url:
+        return jsonify({'error': 'No URL provided'}), 400
+
+    ydl_opts = {'quiet': True, 'noplaylist': True}
+    
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            # download=False is the key: it's nearly instant
+            info = ydl.extract_info(video_url, download=False)
+            
+            # Extract unique resolutions from formats
+            # We filter for heights that exist and are common (360, 480, 720, 1080)
+            formats = info.get('formats', [])
+            available_res = sorted(list(set(
+                f['height'] for f in formats 
+                if f.get('height') and f['height'] <= 1080
+            )), reverse=True)
+
+            return jsonify({
+                'title': info.get('title'),
+                'thumbnail': info.get('thumbnail'),
+                'duration': info.get('duration_string'),
+                'resolutions': available_res
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/convert', methods=['POST'])
 def convert_video():
     data = request.json
     video_url = data.get('url')
-    user_code = data.get('code', '').strip() # Get the code from frontend
+    user_code = data.get('code', '').strip().lower()
+    res = data.get('resolution', '720') # Default to 720p
+    print(f"DEBUG: Received resolution request for: {res}") # Check your console!
 
     if not video_url:
         return jsonify({'error': 'No URL provided'}), 400
-    
-    # Clear the debug file for every new request
-    with open(DEBUG_LOG, 'w') as f:
-        f.write(f"--- New Request at {time.ctime()} ---\n")
-        f.write(f"URL: {video_url}\n")
 
-    # 1. Create a copy of the base options so we don't mess up other users
-    current_opts = base_opts.copy()
+    # TURBO DOWNLOAD-ONLY OPTIONS (No FFmpeg re-encoding)
+    ydl_opts = {
+        # Using a more robust format string for iPad compatibility
+        'format': f'bestvideo[height<={res}][ext=mp4]/best[height<={res}][ext=mp4]/best',
+        #'merge_output_format': 'mp4',
+        'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(id)s_%(title)s.%(ext)s'),
+        'noplaylist': True,
+        'cachedir': False,
+        'force_overwrites': True,
+        'overwrites': True,
+    }
 
-    # 2. Check the Code
-    if user_code == "xieliang":
-        print(f"✅ Authenticated user ({user_code}): Downloading FULL video.")
-    else:
-        print(f"⚠️ Unregistered user: Limiting to 3 minutes.")
-        # Add the range limiter: Start at 0, End at 180 seconds (3 mins)
-        current_opts['download_ranges'] = download_range_func(None, [(0, 180)])
-        # Force keyframes ensures the cut video is playable and doesn't freeze at the end
-        current_opts['force_keyframes_at_cuts'] = True
+    # Handle Promotion Code (Full vs 3-Min Trial)
+    if user_code != PROMO_CODE:
+        # Limited to first 180 seconds
+        ydl_opts['download_ranges'] = lambda info_dict, self: [{'start_time': 0, 'end_time': 180}]
+        ydl_opts['force_keyframes_at_cuts'] = True
 
     try:
-        # Redirect stderr to our debug file while running yt-dlp
-        original_stderr = sys.stderr
-        with open(DEBUG_LOG, 'a') as f:
-            sys.stderr = f  # Redirect
-            with YoutubeDL(current_opts) as ydl:
-                # 1. Extract info (download=True triggers the download and post-processing)
-                info = ydl.extract_info(video_url, download=True)
-                
-                # 2. BUG FIX: Get the actual filename generated by the template
-                # prepare_filename returns the full path (e.g., "downloads/abc123_MyVideo.webm")
-                full_path = ydl.prepare_filename(info)
-                
-                # 3. Since we used FFmpegVideoConvertor to force .mp4, 
-                # we must change the extension of our path variable to .mp4
-                final_path = os.path.splitext(full_path)[0] + "_ipad.mp4"
-                
-                # 4. Get just the filename (without the folder path) to send to the frontend
-                filename = os.path.basename(final_path)
-            sys.stderr = original_stderr # Restore
-
-        # 2. CALL FFMPEG AS SUBPROCESS
-        # We use your exact high-compatibility flags
-        ffmpeg_cmd = [
-            'ffmpeg', '-y',
-            '-i', full_path,
-            '-vf', 'scale=1280:720',
-            '-c:v', 'libx264',
-            '-profile:v', 'high',
-            '-level', '4.0',
-            '-pix_fmt', 'yuv420p',
-            '-preset', 'superfast', # Use superfast for turbo speed
-            '-crf', '20',
-            '-movflags', '+faststart',
-            '-c:a', 'aac',
-            '-b:a', '160k',
-            final_path
-        ]
-
-        print(f"\n🚀 TURBO CONVERSION STARTING: {full_path}")
-
-        with open(DEBUG_LOG, 'a') as log_file:
-            log_file.write(f"\n--- FFmpeg Subprocess Call: {time.ctime()} ---\n")
-            # This executes your system's ffmpeg.exe
-            # Start process, piping stderr (FFmpeg progress info)
-            process = subprocess.Popen(
-                ffmpeg_cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT, 
-                text=True,
-                encoding='utf-8',
-                errors='replace'
-            )
-
-            # Read output line by line as it generates
-            if process.stdout:
-                for line in iter(process.stdout.readline, ""):
-                    # 1. Print to Python Console for you to see
-                    sys.stdout.write(line)
-                    sys.stdout.flush()
-                    
-                    # 2. Save to Debug File
-                    log_file.write(line)
-            
-            process.wait() # Ensure process is finished
-
-        # Step 4: Validate and Cleanup
-        if process.returncode == 0:
-            # Delete the source (e.g. .webm) to save space if it differs from the mp4
-            if os.path.exists(full_path) and full_path != final_path:
-                os.remove(full_path)
-        else:
-            return jsonify({'error': 'FFmpeg Turbo conversion failed. See debug.txt'}), 500
-
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(video_url, download=True)
+            full_path = ydl.prepare_filename(info)
+            filename = os.path.basename(full_path)
             
         return jsonify({
             'status': 'success', 
             'download_url': f"/download/{filename}",
             'title': info.get('title', 'Video'),
-            'mode': 'full' if user_code == "xieliang" else 'trial'
+            'mode': 'full' if user_code == PROMO_CODE else 'trial'
         })
 
     except Exception as e:
-        # Restore stderr in case it crashed inside the block
-        sys.stderr = original_stderr 
-        
-        # READ the debug file to see what actually happened
-        with open(DEBUG_LOG, 'r') as f:
-            full_log = f.read().lower()
-
-        print(f"DEBUG FILE CONTENT:\n{full_log}") # Also print to your terminal
-
-        # Check for DRM in the file content
-        if any(word in full_log for word in ["drm", "encrypted", "premium", "protected"]):
-            error_msg = "This video is DRM protected and cannot be downloaded legally."
-        elif "private video" in full_log:
-            error_msg = "This video is private."
+        # Parse common errors (DRM, Private, etc.)
+        err_str = clean_ansi(str(e)).lower()
+        if "drm" in err_str or "protected" in err_str:
+            msg = "This video is DRM protected and cannot be downloaded."
+        elif "private" in err_str:
+            msg = "This video is private."
         else:
-            # Fallback to the Exception string if the log is vague
-            error_msg = f"Error: {clean_ansi(str(e))}"
+            msg = f"Error: {clean_ansi(str(e))}"
+        return jsonify({'error': msg}), 500
 
-        return jsonify({'error': error_msg}), 500
-
-@app.route('/download/<filename>')
+@app.route('/download/<path:filename>')
 def download_file(filename):
     file_path = os.path.join(DOWNLOAD_FOLDER, filename)
-    print(file_path)
     if os.path.exists(file_path):
         return send_file(file_path, as_attachment=True)
-    else:
-        return jsonify({'error': 'File not found'}), 404
+    return jsonify({'error': 'File expired or not found'}), 404
 
 if __name__ == '__main__':
-    try:
-        app.run(debug=True, use_reloader=False, port=5000)
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
+    # For local testing; AWS uses Gunicorn
+    app.run(host='0.0.0.0', port=5000)
