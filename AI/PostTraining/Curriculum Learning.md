@@ -1,3 +1,452 @@
+## Question: Give me a detailed curriculum learning plan for duplicate products based detection based on their physical and functional attributes using titles, images, product detail page textual information and PDP images if necessary.
+
+Below is a **complete, production-grade curriculum learning plan** for **duplicate product detection** based on:
+
+* Title
+* PDP textual content
+* Structured attributes (if any)
+* Product images (optional / staged in later phase)
+
+The objective is to detect **true physical/functional duplicates**, not merely semantic similarity.
+
+I will structure this as:
+
+1. Problem formalization
+2. Target schema design
+3. Difficulty taxonomy (what makes duplicate detection hard)
+4. Curriculum phases (T0 → T4)
+5. Negative sampling strategy per phase
+6. Hard sample mining strategy
+7. Image staging strategy (cost-aware)
+8. Optimization details (contrastive setup, temperature, margin)
+9. Evaluation evolution across phases
+10. Iteration loop
+
+---
+
+# 1️⃣ Problem Formalization
+
+We define duplicate as:
+
+> Two listings represent the same physical product model with identical functional attributes, even if seller, wording, image style, or listing structure differ.
+
+Non-duplicates include:
+
+* Same category but different size
+* Same base model but different capacity
+* Same item but different brand
+* Accessories vs core product
+* Bundles vs single unit
+
+This is fundamentally a **fine-grained multimodal equivalence task**, not generic similarity.
+
+---
+
+# 2️⃣ Target Schema Design
+
+Do NOT use binary-only labels.
+
+Use structured schema:
+
+```
+{
+  pair_id,
+  duplicate_label: {duplicate, non_duplicate},
+  duplicate_type: {
+      exact_model_match,
+      same_product_different_packaging,
+      variant_conflict,
+      accessory_mismatch,
+      brand_mismatch,
+      functional_mismatch
+  },
+  confidence,
+  evidence_source: {
+      title,
+      structured_attr,
+      description,
+      image
+  }
+}
+```
+
+This allows:
+
+* Error diagnostics
+* Curriculum staging by duplicate_type
+* Balanced sampling
+
+---
+
+# 3️⃣ Difficulty Taxonomy
+
+Duplicate detection difficulty grows along these axes:
+
+| Axis             | Easy             | Hard                        |
+| ---------------- | ---------------- | --------------------------- |
+| Title similarity | Almost identical | Paraphrased / missing model |
+| Attributes       | Structured match | Hidden in description       |
+| Images           | Same stock image | Different lifestyle shots   |
+| Brand            | Same brand       | Rebranded / OEM             |
+| Variants         | Same size        | Slight capacity difference  |
+| Bundles          | Single vs single | Bundle vs single            |
+
+We use these axes to design curriculum stages.
+
+---
+
+# 4️⃣ Curriculum Phases (T0 → T4)
+
+We fine-tune a pretrained VLM (e.g., CLIP-style dual encoder).
+
+---
+
+## 🔹 T0 — Identity Warm Start (Representation Stabilization)
+
+**Goal:** Teach model trivial equivalence.
+
+Data:
+
+* Same listing paired with itself
+* Slightly augmented titles (punctuation removed, case change)
+
+Positives:
+
+```
+(A, A)
+(A, A_title_variation)
+```
+
+Negatives:
+
+* Completely unrelated categories
+
+Loss:
+
+* Contrastive (InfoNCE)
+* High temperature (τ = 0.1–0.2)
+
+Why:
+
+* Stabilizes embedding space
+* Avoids collapse
+* Creates tight intra-item clusters
+
+---
+
+## 🔹 T1 — Explicit Model Match
+
+Criteria:
+
+* Exact model number match in title
+* Same brand
+* Same key attributes
+
+Positives:
+
+* Listings sharing identical model ID
+
+Negatives:
+
+* Same category, different model numbers
+
+No image required yet.
+
+Goal:
+Model learns to focus on **model identifiers** and explicit structured clues.
+
+---
+
+## 🔹 T2 — Structured Attribute Match (But Textual Noise)
+
+Now increase difficulty.
+
+Positives:
+
+* Same product, different sellers
+* Titles paraphrased
+* Structured attributes match
+* Descriptions reordered
+
+Negatives:
+
+* Same product family but different variant
+
+  * e.g., 64GB vs 128GB
+  * 5L vs 7L
+* Same model but bundle vs single
+
+Introduce:
+
+**Attribute-aware margin ranking loss**
+
+```
+duplicate: push close
+variant mismatch: medium distance
+true different product: far distance
+```
+
+This is where most real-world false positives occur.
+
+---
+
+## 🔹 T3 — Cross-modal Equivalence (Add Images Selectively)
+
+Now introduce images.
+
+But DO NOT add images to entire dataset.
+
+Use images only for:
+
+* Hard cases
+* Variant confusion
+* Brand confusion
+
+Positives:
+
+* Same product, different packaging
+* Different image angle
+
+Negatives:
+
+* Visually similar but different capacity
+* Different branding printed on exterior
+
+Key objective:
+Model must learn to combine:
+
+* Textual embedding
+* Visual embedding
+
+Fusion method:
+
+* Late fusion scoring OR
+* Multimodal transformer fine-tuning
+
+Temperature slightly reduced (τ ≈ 0.07–0.1)
+
+---
+
+## 🔹 T4 — Hard Cases + Adversarial Negatives
+
+Now introduce:
+
+### 1️⃣ Near-boundary cases
+
+Use clustering to mine:
+
+* High cosine similarity
+* Opposite labels
+
+These are decision-boundary samples.
+
+### 2️⃣ SOP-guided hard negatives
+
+Examples:
+
+* Same model string but different capacity
+* Same product but different brand print
+* Same product + bundled accessory
+* Same exterior image but wrong PDP specs
+
+These are real production traps.
+
+Add:
+
+* Brand mismatch adversarial negatives
+* Functionally incompatible look-alikes
+
+Use:
+
+* Lower temperature
+* Hard negative weighting
+
+---
+
+# 5️⃣ Negative Sampling Strategy Per Phase
+
+| Phase | Negative Type           |
+| ----- | ----------------------- |
+| T0    | Random                  |
+| T1    | Same category           |
+| T2    | Same family variant     |
+| T3    | Visually similar        |
+| T4    | SOP-derived adversarial |
+
+Hard negative mining loop:
+
+1. Embed all listings
+2. Compute nearest neighbors
+3. Select high similarity but non-duplicate pairs
+4. Human verify edge cases
+5. Add back into training
+
+---
+
+# 6️⃣ How Clustering Identifies Hard Samples
+
+Clustering helps by:
+
+### Step 1
+
+Embed all listings.
+
+### Step 2
+
+Cluster by semantic + visual embedding.
+
+### Step 3
+
+Within each cluster:
+
+* Identify items with different labels
+* Identify high similarity but different variant
+* Identify cross-brand close neighbors
+
+These are:
+
+* Variant confusion
+* Brand confusion
+* Capacity confusion
+
+These form T4 hard negative pool.
+
+---
+
+# 7️⃣ Cost-Aware Image Strategy
+
+Since PDP image processing is expensive:
+
+### Stage 1:
+
+Use text-only for T0–T2.
+
+### Stage 2:
+
+Only load images for:
+
+* Samples near similarity threshold
+* Samples inside ambiguous clusters
+* Samples where structured attributes missing
+
+This reduces image inference cost by 70–80%.
+
+Alternative:
+Use precomputed image embeddings stored offline.
+
+---
+
+# 8️⃣ Optimization Details
+
+### Model Type
+
+Dual encoder (text + image)
+
+### Loss
+
+Multi-negative contrastive loss
+
+```
+L = -log exp(sim(i,j)/τ) / Σ exp(sim(i,k)/τ)
+```
+
+### Temperature
+
+| Phase | τ         |
+| ----- | --------- |
+| T0    | 0.15–0.2  |
+| T1    | 0.1–0.15  |
+| T2    | 0.08–0.1  |
+| T3    | 0.07–0.1  |
+| T4    | 0.05–0.08 |
+
+Lower temperature = sharper boundary.
+
+### PEFT
+
+Use:
+
+* LoRA on projection heads
+* Possibly LoRA on cross-attention layers
+
+---
+
+# 9️⃣ Evaluation Evolution
+
+Use multiple metrics:
+
+### 1️⃣ Pairwise Metrics
+
+* Precision@threshold
+* Recall@threshold
+* ROC-AUC
+
+### 2️⃣ Cluster Metrics
+
+* Adjusted Rand Index
+* Pairwise F1
+
+### 3️⃣ Variant Confusion Rate
+
+False positive rate among same-family products.
+
+### 4️⃣ Brand Leakage Rate
+
+Duplicate predicted across brand mismatch.
+
+### 5️⃣ Cost-Sensitive Metric
+
+FP cost >> FN cost.
+
+---
+
+# 🔟 Iteration Loop
+
+Every cycle:
+
+1. Deploy on shadow traffic
+2. Log:
+
+   * High similarity but rejected
+   * Low similarity but manually merged
+3. Cluster embedding drift
+4. Human review 500 hard samples
+5. Add curated T4 data
+6. Retrain small number of epochs
+
+This keeps decision boundary stable.
+
+---
+
+# Final Summary
+
+A strong curriculum for duplicate detection:
+
+1. Stabilize embedding space (identity training)
+2. Teach explicit model match
+3. Teach structured attribute equivalence
+4. Introduce cross-modal reasoning
+5. Inject SOP-guided adversarial negatives
+6. Mine hard samples from clusters
+7. Control image cost with staged loading
+8. Gradually reduce temperature
+9. Evaluate beyond binary accuracy
+10. Iteratively refine boundary
+
+This approach:
+
+* Minimizes overfitting to lexical similarity
+* Prevents brand and variant leakage
+* Controls compute cost
+* Aligns directly with production SOP risk
+
+---
+
+If you want, I can next provide:
+
+* A concrete dataset construction blueprint (SQL + embedding + sampling logic)
+* A PEFT training configuration example
+* Or a visual diagram of the full pipeline architecture
 
 
 I do have a duplicate detection model right now which is based on Qwen-VL 7B. The defects from this model show the following characteristics: 1) small differences in product model of the same series, for example V4 vs V9 other things being equal; 2) different model number such as AB1249W vs AB1249R, where W and R refer to white and red color variants of the same product; 3) different editions, for example Luxury edition vs Limited edition; 4) different specs, for example WiFi vs cellular and LED vs QLED; 5) different shape and size, etc. please explain why curriculum learning can fix these defects and if so how to select and organize data and determine learning schedule. In addition to curriculum learning, what other methods and data strategies can help fix these defects? Please be specific.
