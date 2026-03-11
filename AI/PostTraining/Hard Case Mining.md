@@ -1,4 +1,5 @@
-# QuestionL: before you do that, I have one based on internal business rules. A SKU is the atomic unit to determine if the items are the same or not. We generate a few thousands of positive and negative samples based on the retrieval/ranking approach mentioned above using existing model. For any positive pairs, any other SKU under the same deal would be considered negative pair, and more so a hard negative pair because it would usually the same series of product but varies in color, size, and other attributes. We can also build hard positive pairs based on the human labeled positive pairs where each SKU usually has a couple different title names in internal system but they are the same system.
+# Question: 
+I have one based on internal business rules. A SKU is the atomic unit to determine if the items are the same or not. We generate a few thousands of positive and negative samples based on the retrieval/ranking approach mentioned above using existing model. For any positive pairs, any other SKU under the same deal would be considered negative pair, and more so a hard negative pair because it would usually the same series of product but varies in color, size, and other attributes. We can also build hard positive pairs based on the human labeled positive pairs where each SKU usually has a couple different title names in internal system but they are the same system.
 
 Your business rule is actually **extremely powerful** and aligns well with how large marketplaces structure training data. Using **SKU as the atomic identity** gives you a reliable way to generate both **hard negatives and hard positives** without relying solely on model predictions.
 
@@ -369,3 +370,348 @@ If you want, I can next show a **very powerful technique used in large catalog m
 **“confusion cluster mining.”**
 
 It automatically discovers **groups of products your model repeatedly confuses** and generates thousands of training pairs per cluster. This method often improves models faster than any other mining technique after the first few training iterations.
+
+**Confusion cluster mining** is an advanced hard-example mining method that identifies **groups of products your model consistently confuses with each other**, then generates **large numbers of high-value training pairs** from those groups.
+
+It is extremely effective after a few model iterations because it directly targets **the model’s real decision boundary failures**.
+
+Your **SKU/deal rules + retrieval mining** already give strong supervision. Confusion clusters sit on top of that and focus on **systematic error regions**.
+
+---
+
+# 1️⃣ Core Idea
+
+Instead of mining individual pairs, find **clusters of items that the model believes are very similar**.
+
+Example cluster discovered by the model:
+
+```
+Cluster C1
+ ├─ SKU_A (Vitamin C milk extract 130mg)
+ ├─ SKU_B (Vitamin C milk extract 260mg)
+ ├─ SKU_C (Vitamin C milk extract 130mg capsule)
+ ├─ SKU_D (Vitamin C milk extract 130mg powder)
+```
+
+The model groups them because embeddings are close.
+
+But your SKU rules tell you:
+
+```
+A != B
+A != C
+A != D
+```
+
+So the cluster contains **multiple hard negatives**.
+
+---
+
+# 2️⃣ Why Pair Mining Alone Is Not Enough
+
+Traditional mining retrieves:
+
+```
+top-K neighbors
+```
+
+This gives pairs like:
+
+```
+A–B
+A–C
+A–D
+```
+
+But clustering reveals **structure**:
+
+```
+A
+├─ B
+├─ C
+└─ D
+```
+
+Now you can generate **many more informative pairs**:
+
+```
+A–B
+A–C
+A–D
+B–C
+B–D
+C–D
+```
+
+Cluster mining amplifies training signals.
+
+---
+
+# 3️⃣ How Confusion Clusters Are Built
+
+Pipeline:
+
+```
+embed catalog
+     │
+ANN nearest neighbors
+     │
+similarity graph
+     │
+graph clustering
+     │
+confusion clusters
+```
+
+Each cluster contains items the model thinks are similar.
+
+---
+
+# 4️⃣ Example Similarity Graph
+
+Edges represent high embedding similarity.
+
+```
+SKU_A ── SKU_B
+  │        │
+  │        │
+SKU_C ── SKU_D
+```
+
+Graph clustering groups them into a confusion cluster.
+
+---
+
+# 5️⃣ Use SKU Rules To Label Pairs
+
+Inside the cluster:
+
+```
+same SKU → positive
+different SKU → negative
+```
+
+Example:
+
+```
+A = SKU1
+B = SKU2
+C = SKU3
+```
+
+Pairs:
+
+```
+A-B negative
+A-C negative
+B-C negative
+```
+
+These are **hard negatives** because the model thinks they are similar.
+
+---
+
+# 6️⃣ Hard Positive Mining Inside Clusters
+
+Clusters also reveal **hard positives**.
+
+Example:
+
+```
+SKU1 titles
+  title_a
+  title_b
+```
+
+If embeddings place them far apart but they belong to the same SKU:
+
+```
+title_a – title_b
+```
+
+becomes a **hard positive**.
+
+---
+
+# 7️⃣ Numeric Confusion Clusters
+
+Clusters often reveal numeric confusion automatically.
+
+Example cluster:
+
+```
+Vitamin C 130 mg milk extract
+Vitamin C 260 mg milk extract
+Vitamin C 500 mg milk extract
+```
+
+These are **perfect training negatives**.
+
+---
+
+# 8️⃣ Attribute Confusion Clusters
+
+Another common cluster type:
+
+```
+iPhone 13 Pro 128GB
+iPhone 13 Pro 256GB
+iPhone 13 Pro Max 128GB
+```
+
+These teach **variant discrimination**.
+
+---
+
+# 9️⃣ Code Example — Building Confusion Clusters
+
+### Step 1: Build similarity graph
+
+```python
+import networkx as nx
+
+def build_similarity_graph(neighbors, threshold):
+
+    G = nx.Graph()
+
+    for i, nbrs in enumerate(neighbors):
+
+        for j, sim in nbrs:
+
+            if sim > threshold:
+                G.add_edge(i, j)
+
+    return G
+```
+
+---
+
+### Step 2: Find clusters
+
+```python
+def find_clusters(graph):
+
+    return list(nx.connected_components(graph))
+```
+
+---
+
+# 🔟 Generate Training Pairs From Clusters
+
+```python
+from itertools import combinations
+
+def generate_pairs(cluster, sku_map):
+
+    positives = []
+    negatives = []
+
+    for a, b in combinations(cluster, 2):
+
+        if sku_map[a] == sku_map[b]:
+            positives.append((a, b))
+        else:
+            negatives.append((a, b))
+
+    return positives, negatives
+```
+
+---
+
+# 11️⃣ Filtering Large Clusters
+
+Some clusters may become large.
+
+Limit size:
+
+```
+max cluster size = 20–50
+```
+
+Sample pairs if needed.
+
+---
+
+# 12️⃣ Iterative Confusion Mining
+
+Repeat every model iteration.
+
+Pipeline:
+
+```
+train model
+     ↓
+embed catalog
+     ↓
+build confusion clusters
+     ↓
+generate hard pairs
+     ↓
+retrain
+```
+
+Each cycle pushes the model boundary outward.
+
+---
+
+# 13️⃣ Why This Works Extremely Well
+
+Because it focuses training on:
+
+```
+regions where the model is uncertain
+```
+
+Those regions contain the **highest learning signal**.
+
+Random pairs contain very little information.
+
+---
+
+# 14️⃣ Example Impact in Production Systems
+
+Confusion cluster mining often yields:
+
+```
+duplicate recall +15–30%
+variant precision +20%
+numeric confusion −40%
+```
+
+It accelerates model improvement after initial training.
+
+---
+
+# 15️⃣ How It Fits Your Current Pipeline
+
+Your final pipeline could look like this:
+
+```
+SKU rules → base positives / negatives
+retrieval mining → additional hard pairs
+numeric contrastive augmentation
+confusion cluster mining
+token masking
+```
+
+This produces **millions of high-quality training pairs** with minimal manual labeling.
+
+---
+
+✅ **Important insight for your system**
+
+Your **deal → SKU hierarchy** is perfect for confusion clusters because:
+
+```
+deal = natural cluster candidate
+SKU = ground truth boundary
+```
+
+This lets you detect **variant confusion automatically**.
+
+---
+
+If you'd like, I can also show one **very advanced trick specifically for VLM models like Qwen3-VL**:
+
+**multimodal disagreement mining** — where you mine cases where **text similarity and image similarity disagree**, which is one of the strongest signals for training duplicate detectors.
+
