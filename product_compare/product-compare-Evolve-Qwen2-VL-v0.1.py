@@ -114,6 +114,10 @@ class MatchingModel(nn.Module):
              MODEL_NAME,
              torch_dtype=torch.float16
         ).to(DEVICE)
+        
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+
 
         lora_config = LoraConfig(
             r=8,
@@ -165,7 +169,10 @@ class MatchingModel(nn.Module):
              padding=True
          ).to(self.device)
 
-         outputs = self.encoder(**inputs)
+         with torch.no_grad():
+            outputs = self.encoder(**inputs)
+
+         #outputs = self.encoder(**inputs)
 
          hidden_states = outputs.last_hidden_state
          emb = hidden_states[:, -1]  # stable pooling
