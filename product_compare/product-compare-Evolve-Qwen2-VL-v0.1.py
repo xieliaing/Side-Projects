@@ -23,6 +23,7 @@ MODEL_NAME = "Qwen/Qwen2-VL-2B-Instruct"  # substitute if needed
 
 MAX_LEN = 128
 BATCH_SIZE = 4
+EVAL_BATCH_SIZE = 256
 STEPS_STAGE1 = 200
 STEPS_STAGE2 = 600
 POP_SIZE = 8
@@ -334,7 +335,7 @@ def run_evolution(train_path, eval_path):
     train_data = ProductPairDataset(train_path)
     eval_data = ProductPairDataset(eval_path)
 
-    eval_loader = DataLoader(eval_data, batch_size=1)
+    eval_loader = DataLoader(eval_data, batch_size=EVAL_BATCH_SIZE)
 
     population = [
         {"opt_lr": 1e-4, "alpha": 0.1, "switch_step": 200}
@@ -345,7 +346,14 @@ def run_evolution(train_path, eval_path):
 
         results = []
 
-        for cand in population:
+        for i, cand in enumerate(population):
+        #for i, cand in enumerate(
+        #    tqdm(population, desc=f"Gen {gen} Candidates", leave=False)
+        #):
+            print(
+               f"[G{gen}|C{i}] "
+               f"lr={cand['opt_lr']:.5f}, alpha={cand['alpha']:.3f}"
+            )
 
             model = train_candidate(cand, train_data)
 
@@ -354,12 +362,7 @@ def run_evolution(train_path, eval_path):
             cand["fitness"] = acc
             results.append(cand)
             
-            print(
-                 f"[G{gen}|C{i}] "
-                 f"lr={cand['opt_lr']:.5f}, "
-                 f"alpha={cand['alpha']:.3f} → "
-                 f"{acc:.4f}"
-            )
+            print(f" → {acc:.4f}")
 
         results.sort(key=lambda x: -x["fitness"])
 
