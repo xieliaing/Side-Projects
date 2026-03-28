@@ -3,6 +3,7 @@ import json
 import random
 import math
 import pandas as pd
+from tqdm import tqdm
 from copy import deepcopy
 
 import torch
@@ -278,13 +279,19 @@ def evaluate(model, dataloader):
 def train_candidate(candidate, dataset):
 
     model = MatchingModel()
-
     optimizer = EvoOptimizer(lr=candidate["opt_lr"])
     loss_fn = EvoLoss(alpha=candidate["alpha"])
+    gradient_accumulation_steps = 4
 
     model.train()
+    
+    step_bar = tqdm(
+        range(STEPS_STAGE1),
+        desc=f"Training (lr={candidate['opt_lr']:.5f})",
+        leave=False  # important for nesting
+    )
 
-    for step in range(STEPS_STAGE1):
+    for step in step_bar:
 
         item = dataset[random.randint(0, len(dataset)-1)]
 
@@ -299,14 +306,19 @@ def train_candidate(candidate, dataset):
         emb1, emb2, logits = model(batch)
 
         loss = loss_fn(logits, batch["label"], emb1, emb2)
-
         loss.backward()
 
-        for name, p in model.named_parameters():
-            if p.grad is not None:
-                optimizer.step(p, p.grad, name)
+        if (step + 1) % gradient_accumulation_steps == 0:
+            for name, p in model.named_parameters():
+                if p.grad is not None:
+                    optimizer.step(p, p.grad, name)
+                    
+            model.zero_grad()
 
-        model.zero_grad()
+        # optional live update
+        step_bar.set_postfix({
+            "loss": f"{loss.item():.4f}"
+        })
 
     return model
 
