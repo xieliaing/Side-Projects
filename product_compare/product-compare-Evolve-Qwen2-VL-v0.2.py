@@ -147,16 +147,16 @@ class MatchingModel(nn.Module):
          image = Image.open(image_path).convert("RGB")
 
          messages = [
-         {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": f"Product A: {title1}"},
-                {"type": "image"},
-                {"type": "text", "text": f"Product B: {title2}"}
-            ]
-         }
-]
+             {
+                "role": "user",
+                "content": [
+                    {"type": "image"},
+                    {"type": "text", "text": f"Product A: {title1}"},
+                    {"type": "image"},
+                    {"type": "text", "text": f"Product B: {title2}"}
+                ]
+             }
+         ]
 
          text_input = self.processor.apply_chat_template(
              messages,
